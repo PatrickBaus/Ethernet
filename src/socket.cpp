@@ -119,6 +119,7 @@ makesocket:
 	state[s].RX_inc = 0;
 	state[s].TX_FSR = 0;
 	//Serial.printf("W5000socket prot=%d, RX_RD=%d\n", W5100.readSnMR(s), state[s].RX_RD);
+	W5100.writeSnKPALVTR(s, 1);    // Set keep alive to 1*5 seconds
 	SPI.endTransaction();
 	return s;
 }
