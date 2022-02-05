@@ -197,15 +197,18 @@ public:
   __GP_REGISTER_N(SIPR,   0x000F, 4); // Source IP address
   __GP_REGISTER8 (IR,     0x0015);    // Interrupt
   __GP_REGISTER8 (IMR,    0x0016);    // Interrupt Mask
-  __GP_REGISTER16(RTR,    0x0017);    // Timeout address
-  __GP_REGISTER8 (RCR,    0x0019);    // Retry count
+  __GP_REGISTER16(RTR,    0x0019);    // Timeout address
+  __GP_REGISTER8 (RCR,    0x001B);    // Retry count
   __GP_REGISTER8 (RMSR,   0x001A);    // Receive memory size (W5100 only)
   __GP_REGISTER8 (TMSR,   0x001B);    // Transmit memory size (W5100 only)
   __GP_REGISTER8 (PATR,   0x001C);    // Authentication type address in PPPoE mode
-  __GP_REGISTER8 (PTIMER, 0x0028);    // PPP LCP Request Timer
-  __GP_REGISTER8 (PMAGIC, 0x0029);    // PPP LCP Magic Number
-  __GP_REGISTER_N(UIPR,   0x002A, 4); // Unreachable IP address in UDP mode (W5100 only)
-  __GP_REGISTER16(UPORT,  0x002E);    // Unreachable Port address in UDP mode (W5100 only)
+  __GP_REGISTER8 (PTIMER, 0x001C);    // PPP LCP Request Timer
+  __GP_REGISTER8 (PMAGIC, 0x001D);    // PPP LCP Magic Number
+  __GP_REGISTER_N(PHAR, 0x001E, 6);   // PPP Destination MAC address
+  __GP_REGISTER16(PSID, 0x0024);      // PPP Session ID
+  __GP_REGISTER16(PMRU, 0x0026);      // PPP Maximum Segment Size
+  __GP_REGISTER_N(UIPR,   0x0028, 4); // Unreachable IP address in UDP mode (W5100 only)
+  __GP_REGISTER16(UPORT,  0x002C);    // Unreachable Port address in UDP mode (W5100 only)
   __GP_REGISTER8 (VERSIONR_W5200,0x001F);   // Chip Version Register (W5200 only)
   __GP_REGISTER8 (VERSIONR_W5500,0x0039);   // Chip Version Register (W5500 only)
   __GP_REGISTER8 (PSTATUS_W5200,     0x0035);    // PHY Status
