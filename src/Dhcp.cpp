@@ -105,7 +105,7 @@ int DhcpClass::request_DHCP_lease()
 	}
 
 	// We're done with the socket now
-	_dhcpUdpSocket.stop();
+	//_dhcpUdpSocket.stop();       // FIX: Do not release the port, so that it cannot be claimed by another task
 	_dhcpTransactionId++;
 
 	_lastCheckLeaseMillis = millis();
