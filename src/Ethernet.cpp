@@ -25,9 +25,21 @@
 
 IPAddress EthernetClass::_dnsServerAddress;
 DhcpClass* EthernetClass::_dhcp = NULL;
+unsigned long EthernetClass::_timeout = 4000;   // in ms
 
 int EthernetClass::begin(uint8_t *mac, unsigned long timeout, unsigned long responseTimeout)
 {
+    _timeout = timeout;
+    // Return immediately if we have an error (0) during init
+    // A result of 2 means, that we are in progress and need to process the DHCP requests now
+    if (beginAsync(mac, responseTimeout) != 2) {
+        return 0;
+    }
+
+    return processDHCPRequest(_timeout);
+}
+
+int EthernetClass::beginAsync(uint8_t *mac, unsigned long responseTimeout) {
 	static DhcpClass s_dhcp;
 	_dhcp = &s_dhcp;
 
@@ -38,20 +50,37 @@ int EthernetClass::begin(uint8_t *mac, unsigned long timeout, unsigned long resp
 	W5100.setIPAddress(IPAddress(0,0,0,0).raw_address());
 	SPI.endTransaction();
 
-	// Now try to get our config info from a DHCP server
-	int ret = _dhcp->beginWithDHCP(mac, timeout, responseTimeout);
-	if (ret == 1) {
-		// We've successfully found a DHCP server and got our configuration
-		// info, so set things accordingly
-		SPI.beginTransaction(SPI_ETHERNET_SETTINGS);
-		W5100.setIPAddress(_dhcp->getLocalIp().raw_address());
-		W5100.setGatewayIp(_dhcp->getGatewayIp().raw_address());
-		W5100.setSubnetMask(_dhcp->getSubnetMask().raw_address());
-		SPI.endTransaction();
-		_dnsServerAddress = _dhcp->getDnsServerIp();
-		socketPortRand(micros());
-	}
-	return ret;
+    return _dhcp->initDHCPRequest(mac, responseTimeout);
+}
+
+int EthernetClass::processDHCPRequest(unsigned long timeout) {
+    int result;
+    unsigned long startTime = millis();
+    do {
+        result = processDHCPRequestAsync();
+        if (result != 1 /*success*/ and (millis() - startTime) > timeout) {
+            result = 0;   // TODO: Change result from Error (0) to Timeout (255)
+            break;
+        }
+    } while (result != 1 and result != 0);  // Keep going until the result is either a success (1) or an error (0)
+    return result;
+}
+
+int EthernetClass::processDHCPRequestAsync() {
+    int result = _dhcp->processDHCPRequestAsync();
+
+    if (result == 1) {
+        // We've successfully found a DHCP server and got our configuration
+        // info, so set things accordingly
+        SPI.beginTransaction(SPI_ETHERNET_SETTINGS);
+        W5100.setIPAddress(_dhcp->getLocalIp().raw_address());
+        W5100.setGatewayIp(_dhcp->getGatewayIp().raw_address());
+        W5100.setSubnetMask(_dhcp->getSubnetMask().raw_address());
+        SPI.endTransaction();
+        _dnsServerAddress = _dhcp->getDnsServerIp();
+        socketPortRand(micros());
+    }
+    return result;
 }
 
 void EthernetClass::begin(uint8_t *mac, IPAddress ip)
@@ -125,30 +154,21 @@ EthernetHardwareStatus EthernetClass::hardwareStatus()
 	}
 }
 
-int EthernetClass::maintain()
+int EthernetClass::maintain() {
+    int result = maintainAsync();
+    if (result == DHCP_CHECK_RENEW_WAIT or result == DHCP_CHECK_REBIND_WAIT) {
+        return processDHCPRequest(_timeout);    // FIXME
+    }
+
+    return DHCP_CHECK_NONE;
+}
+
+int EthernetClass::maintainAsync()
 {
 	int rc = DHCP_CHECK_NONE;
 	if (_dhcp != NULL) {
 		// we have a pointer to dhcp, use it
-		rc = _dhcp->checkLease();
-		switch (rc) {
-		case DHCP_CHECK_NONE:
-			//nothing done
-			break;
-		case DHCP_CHECK_RENEW_OK:
-		case DHCP_CHECK_REBIND_OK:
-			//we might have got a new IP.
-			SPI.beginTransaction(SPI_ETHERNET_SETTINGS);
-			W5100.setIPAddress(_dhcp->getLocalIp().raw_address());
-			W5100.setGatewayIp(_dhcp->getGatewayIp().raw_address());
-			W5100.setSubnetMask(_dhcp->getSubnetMask().raw_address());
-			SPI.endTransaction();
-			_dnsServerAddress = _dhcp->getDnsServerIp();
-			break;
-		default:
-			//this is actually an error, it will retry though
-			break;
-		}
+        rc = _dhcp->checkLease();
 	}
 	return rc;
 }

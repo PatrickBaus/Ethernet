@@ -6,12 +6,12 @@
 #include "Dhcp.h"
 #include "utility/w5100.h"
 
-int DhcpClass::beginWithDHCP(uint8_t *mac, unsigned long timeout, unsigned long responseTimeout)
+//return:0 on error, non-zero otherwise
+uint8_t DhcpClass::initDHCPRequest(uint8_t *mac, unsigned long responseTimeout)
 {
 	_dhcpLeaseTime=0;
 	_dhcpT1=0;
 	_dhcpT2=0;
-	_timeout = timeout;
 	_responseTimeout = responseTimeout;
 
 	// zero out _dhcpMacAddr
@@ -20,20 +20,11 @@ int DhcpClass::beginWithDHCP(uint8_t *mac, unsigned long timeout, unsigned long 
 
 	memcpy((void*)_dhcpMacAddr, (void*)mac, 6);
 	_dhcp_state = STATE_DHCP_START;
-	return request_DHCP_lease();
+
+	return prepareDHCPSocket();
 }
 
-void DhcpClass::reset_DHCP_lease()
-{
-	// zero out _dhcpSubnetMask, _dhcpGatewayIp, _dhcpLocalIp, _dhcpDhcpServerIp, _dhcpDnsServerIp
-	memset(_dhcpLocalIp, 0, 20);
-}
-
-	//return:0 on error, 1 if request is sent and response is received
-int DhcpClass::request_DHCP_lease()
-{
-	uint8_t messageType = 0;
-
+uint8_t DhcpClass::prepareDHCPSocket() {
 	// Pick an initial transaction ID
 	_dhcpTransactionId = random(1UL, 2000UL);
 	_dhcpInitialTransactionId = _dhcpTransactionId;
@@ -43,41 +34,98 @@ int DhcpClass::request_DHCP_lease()
 		// Couldn't get a socket
 		return 0;
 	}
-
+	_startOfLeaseRequest = millis();
 	presend_DHCP();
+	return 2;
+}
 
-	int result = 0;
+void DhcpClass::reset_DHCP_lease()
+{
+	// zero out _dhcpSubnetMask, _dhcpGatewayIp, _dhcpLocalIp, _dhcpDhcpServerIp, _dhcpDnsServerIp
+	memset(_dhcpLocalIp, 0, 20);
+}
 
-	unsigned long startTime = millis();
+// Return 0 on error, 1 when we have a lease/success, 2 when waiting
+int DhcpClass::processDHCPRequestAsync()
+{
+	if (_dhcp_state == STATE_DHCP_LEASED) {
+		return 1;   // Success (1)
+	}
 
-	while (_dhcp_state != STATE_DHCP_LEASED) {
-		if (_dhcp_state == STATE_DHCP_START) {
+	int result;
+	uint32_t respId;
+	uint8_t messageType;
+	static unsigned long timeoutCounter;
+	static unsigned long sleepCounter;
+
+	switch (_dhcp_state) {
+		case STATE_DHCP_START:
 			_dhcpTransactionId++;
-			send_DHCP_MESSAGE(DHCP_DISCOVER, ((millis() - startTime) / 1000));
-			_dhcp_state = STATE_DHCP_DISCOVER;
-		} else if (_dhcp_state == STATE_DHCP_REREQUEST) {
-			_dhcpTransactionId++;
-			send_DHCP_MESSAGE(DHCP_REQUEST, ((millis() - startTime)/1000));
-			_dhcp_state = STATE_DHCP_REQUEST;
-		} else if (_dhcp_state == STATE_DHCP_DISCOVER) {
-			uint32_t respId;
+			send_DHCP_MESSAGE(DHCP_DISCOVER, ((millis() - _startOfLeaseRequest) / 1000));
+			_dhcp_state = STATE_WAIT_FOR_DHCP_OFFER;
+			result = 2;	 // Waiting (2)
+			timeoutCounter = sleepCounter = millis();
+			break;
+		case STATE_WAIT_FOR_DHCP_OFFER:
+			if (millis() - sleepCounter < 50) {
+				result = 2;	 // Waiting (2)
+			} else {
+				sleepCounter = millis();
+				switch (waitForDHCPResponse(timeoutCounter)) {
+					case 1:	 // Success (1)
+						_dhcp_state = STATE_DHCP_DISCOVER;
+					case 2:	 // Waiting (2)
+						result = 2;
+						break;
+					case 255:   // Timeout (255)
+						_dhcp_state = STATE_DHCP_START;
+						break;
+					default:
+						result = 0;
+				}
+			}
+			break;
+		case STATE_DHCP_DISCOVER:
 			messageType = parseDHCPResponse(_responseTimeout, respId);
 			if (messageType == DHCP_OFFER) {
 				// We'll use the transaction ID that the offer came with,
 				// rather than the one we were up to
 				_dhcpTransactionId = respId;
-				send_DHCP_MESSAGE(DHCP_REQUEST, ((millis() - startTime) / 1000));
-				_dhcp_state = STATE_DHCP_REQUEST;
+				send_DHCP_MESSAGE(DHCP_REQUEST, ((millis() - _startOfLeaseRequest) / 1000));
+				timeoutCounter = sleepCounter = millis();
+				_dhcp_state = STATE_WAIT_FOR_DHCP_ACK;
 			}
-		} else if (_dhcp_state == STATE_DHCP_REQUEST) {
-			uint32_t respId;
+			else {
+				_dhcp_state = STATE_WAIT_FOR_DHCP_OFFER;
+			}
+			result = 2; // Waiting (2)
+			timeoutCounter = sleepCounter = millis();
+			break;
+		case STATE_WAIT_FOR_DHCP_ACK:
+			if (millis() - sleepCounter < 50) {
+				result = 2;	 // Waiting (2)
+			} else {
+				sleepCounter = millis();
+				switch (waitForDHCPResponse(timeoutCounter)) {
+					case 1:	 // Success (1)
+						_dhcp_state = STATE_DHCP_REQUEST;
+					case 2:	 // Waiting (2)
+						result = 2;
+						break;
+					case 255:   // Timeout (255)
+						_dhcp_state = STATE_DHCP_START;
+						break;
+					default:
+						result = 0;
+				}
+			}
+			break;
+		case STATE_DHCP_REQUEST:
 			messageType = parseDHCPResponse(_responseTimeout, respId);
 			if (messageType == DHCP_ACK) {
-				_dhcp_state = STATE_DHCP_LEASED;
-				result = 1;
 				//use default lease time if we didn't get it
 				if (_dhcpLeaseTime == 0) {
-					_dhcpLeaseTime = DEFAULT_LEASE;
+					_dhcpLeaseTime = DEFAULT_LEASE * 1000;
 				}
 				// Calculate T1 & T2 if we didn't get it
 				if (_dhcpT1 == 0) {
@@ -88,27 +136,31 @@ int DhcpClass::request_DHCP_lease()
 					// T2 should be 87.5% (7/8ths) of _dhcpLeaseTime
 					_dhcpT2 = _dhcpLeaseTime - (_dhcpLeaseTime >> 3);
 				}
-				_renewInSec = _dhcpT1;
-				_rebindInSec = _dhcpT2;
+				_renewInMilliSec = _dhcpT1;
+				_rebindInMilliSec = _dhcpT2;
+				_lastCheckLeaseMillis = millis();
+				result = 1;
+				_dhcp_state = STATE_DHCP_LEASED;
+				_dhcpTransactionId++;
 			} else if (messageType == DHCP_NAK) {
+				result = 2;
 				_dhcp_state = STATE_DHCP_START;
+			} else {
+				_dhcp_state = STATE_WAIT_FOR_DHCP_ACK;
+				result = 2;
+				timeoutCounter = sleepCounter = millis();
 			}
-		}
-
-		if (messageType == 255) {
-			messageType = 0;
-			_dhcp_state = STATE_DHCP_START;
-		}
-
-		if (result != 1 && ((millis() - startTime) > _timeout))
 			break;
+		case STATE_DHCP_REREQUEST:
+			_dhcpTransactionId++;
+			send_DHCP_MESSAGE(DHCP_REQUEST, ((millis() - _startOfLeaseRequest)/1000));
+			_dhcp_state = STATE_DHCP_REQUEST;
+			result = 2;
+			break;
+		default:
+			result = 0; // unknown error
 	}
 
-	// We're done with the socket now
-	//_dhcpUdpSocket.stop();       // FIX: Do not release the port, so that it cannot be claimed by another task
-	_dhcpTransactionId++;
-
-	_lastCheckLeaseMillis = millis();
 	return result;
 }
 
@@ -233,19 +285,22 @@ void DhcpClass::send_DHCP_MESSAGE(uint8_t messageType, uint16_t secondsElapsed)
 	_dhcpUdpSocket.endPacket();
 }
 
+uint8_t DhcpClass::waitForDHCPResponse(unsigned long startTime) {
+	if (_dhcpUdpSocket.parsePacket() <= 0) {
+		if ((millis() - startTime) > _responseTimeout) {
+			return 255;  // Timeout (255)
+		}
+		return 2; // Waiting (2)
+	}
+	return 1;   // Success (1)
+}
+
+// returns 255 on timeout
 uint8_t DhcpClass::parseDHCPResponse(unsigned long responseTimeout, uint32_t& transactionId)
 {
 	uint8_t type = 0;
 	uint8_t opt_len = 0;
 
-	unsigned long startTime = millis();
-
-	while (_dhcpUdpSocket.parsePacket() <= 0) {
-		if ((millis() - startTime) > responseTimeout) {
-			return 255;
-		}
-		delay(50);
-	}
 	// start reading in the packet
 	RIP_MSG_FIXED fixedMsg;
 	_dhcpUdpSocket.read((uint8_t*)&fixedMsg, sizeof(RIP_MSG_FIXED));
@@ -309,20 +364,20 @@ uint8_t DhcpClass::parseDHCPResponse(unsigned long responseTimeout, uint32_t& tr
 			case dhcpT1value :
 				opt_len = _dhcpUdpSocket.read();
 				_dhcpUdpSocket.read((uint8_t*)&_dhcpT1, sizeof(_dhcpT1));
-				_dhcpT1 = ntohl(_dhcpT1);
+				_dhcpT1 = ntohl(_dhcpT1) * 1000;	// in ms
 				break;
 
 			case dhcpT2value :
 				opt_len = _dhcpUdpSocket.read();
 				_dhcpUdpSocket.read((uint8_t*)&_dhcpT2, sizeof(_dhcpT2));
-				_dhcpT2 = ntohl(_dhcpT2);
+				_dhcpT2 = ntohl(_dhcpT2) * 1000;	// in ms
 				break;
 
 			case dhcpIPaddrLeaseTime :
 				opt_len = _dhcpUdpSocket.read();
 				_dhcpUdpSocket.read((uint8_t*)&_dhcpLeaseTime, sizeof(_dhcpLeaseTime));
 				_dhcpLeaseTime = ntohl(_dhcpLeaseTime);
-				_renewInSec = _dhcpLeaseTime;
+				_renewInMilliSec = _dhcpLeaseTime * 1000;
 				break;
 
 			default :
@@ -340,14 +395,13 @@ uint8_t DhcpClass::parseDHCPResponse(unsigned long responseTimeout, uint32_t& tr
 	return type;
 }
 
-
 /*
-    returns:
-    0/DHCP_CHECK_NONE: nothing happened
-    1/DHCP_CHECK_RENEW_FAIL: renew failed
-    2/DHCP_CHECK_RENEW_OK: renew success
-    3/DHCP_CHECK_REBIND_FAIL: rebind fail
-    4/DHCP_CHECK_REBIND_OK: rebind success
+	returns:
+	0/DHCP_CHECK_NONE: nothing happened
+	1/DHCP_CHECK_RENEW_FAIL: renew failed
+	3/DHCP_CHECK_RENEW_WAIT: waiting for renewal
+	4/DHCP_CHECK_REBIND_FAIL: rebind fail
+	6/DHCP_CHECK_REBIND_OK: waiting for rebind
 */
 int DhcpClass::checkLease()
 {
@@ -359,38 +413,44 @@ int DhcpClass::checkLease()
 	// if more then one sec passed, reduce the counters accordingly
 	if (elapsed >= 1000) {
 		// set the new timestamps
-		_lastCheckLeaseMillis = now - (elapsed % 1000);
-		elapsed = elapsed / 1000;
+		_lastCheckLeaseMillis = now;
 
 		// decrease the counters by elapsed seconds
 		// we assume that the cycle time (elapsed) is fairly constant
 		// if the remainder is less than cycle time * 2
 		// do it early instead of late
-		if (_renewInSec < elapsed * 2) {
-			_renewInSec = 0;
+		if (_renewInMilliSec < elapsed * 2) {
+			_renewInMilliSec = 0;
 		} else {
-			_renewInSec -= elapsed;
+			_renewInMilliSec -= elapsed;
 		}
-		if (_rebindInSec < elapsed * 2) {
-			_rebindInSec = 0;
+		if (_rebindInMilliSec < elapsed * 2) {
+			_rebindInMilliSec = 0;
 		} else {
-			_rebindInSec -= elapsed;
+			_rebindInMilliSec -= elapsed;
+		}
+		if (_dhcpLeaseTime < elapsed) {
+			_dhcpLeaseTime = 0;
+		} else {
+			_dhcpLeaseTime -= elapsed;
 		}
 	}
 
-	// if we have a lease but should renew, do it
-	if (_renewInSec == 0 &&_dhcp_state == STATE_DHCP_LEASED) {
-		_dhcp_state = STATE_DHCP_REREQUEST;
-		rc = 1 + request_DHCP_lease();
+	if (_dhcpLeaseTime == 0 and (_dhcp_state == STATE_DHCP_LEASED or _dhcp_state==STATE_WAIT_FOR_DHCP_OFFER)) {
+		reset_DHCP_lease();
 	}
 
 	// if we have a lease or is renewing but should bind, do it
-	if (_rebindInSec == 0 && (_dhcp_state == STATE_DHCP_LEASED ||
-	  _dhcp_state == STATE_DHCP_START)) {
+	if (_rebindInMilliSec == 0 && _dhcp_state == STATE_DHCP_LEASED) {
 		// this should basically restart completely
 		_dhcp_state = STATE_DHCP_START;
-		reset_DHCP_lease();
-		rc = 3 + request_DHCP_lease();
+		//reset_DHCP_lease();
+		rc = DHCP_CHECK_REBIND_FAIL + prepareDHCPSocket();  // Returns 0 on failure and 2 when in progress
+	}
+	// if we have a lease but should renew, do it
+	else if (_renewInMilliSec == 0 && _dhcp_state == STATE_DHCP_LEASED) {
+		_dhcp_state = STATE_DHCP_REREQUEST;
+		rc = DHCP_CHECK_RENEW_FAIL + prepareDHCPSocket(); // Returns 0 on failure and 2 when in progress
 	}
 	return rc;
 }

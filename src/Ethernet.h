@@ -75,12 +75,17 @@ class EthernetClass {
 private:
 	static IPAddress _dnsServerAddress;
 	static DhcpClass* _dhcp;
+    static unsigned long _timeout;
+    static int processDHCPRequest(unsigned long timeout);
 public:
 	// Initialise the Ethernet shield to use the provided MAC address and
 	// gain the rest of the configuration through DHCP.
 	// Returns 0 if the DHCP configuration failed, and 1 if it succeeded
 	static int begin(uint8_t *mac, unsigned long timeout = 60000, unsigned long responseTimeout = 4000);
+    static int beginAsync(uint8_t *mac, unsigned long responseTimeout = 4000);
+	static int processDHCPRequestAsync();
 	static int maintain();
+    static int maintainAsync();
 	static EthernetLinkStatus linkStatus();
 	static EthernetHardwareStatus hardwareStatus();
 
@@ -289,21 +294,23 @@ private:
 #endif
 	uint32_t _dhcpLeaseTime;
 	uint32_t _dhcpT1, _dhcpT2;
-	uint32_t _renewInSec;
-	uint32_t _rebindInSec;
+	uint32_t _renewInMilliSec;
+	uint32_t _rebindInMilliSec;
 	unsigned long _timeout;
 	unsigned long _responseTimeout;
 	unsigned long _lastCheckLeaseMillis;
 	uint8_t _dhcp_state;
+    uint32_t _startOfLeaseRequest;
 	EthernetUDP _dhcpUdpSocket;
 
-	int request_DHCP_lease();
-	void reset_DHCP_lease();
+    uint8_t prepareDHCPSocket();
+    void reset_DHCP_lease();
 	void presend_DHCP();
 	void send_DHCP_MESSAGE(uint8_t, uint16_t);
 	void printByte(char *, uint8_t);
 
 	uint8_t parseDHCPResponse(unsigned long responseTimeout, uint32_t& transactionId);
+    uint8_t waitForDHCPResponse(unsigned long startTime);
 public:
 	IPAddress getLocalIp();
 	IPAddress getSubnetMask();
@@ -311,8 +318,10 @@ public:
 	IPAddress getDhcpServerIp();
 	IPAddress getDnsServerIp();
 
-	int beginWithDHCP(uint8_t *, unsigned long timeout = 60000, unsigned long responseTimeout = 4000);
-	int checkLease();
+    uint8_t initDHCPRequest(uint8_t *, unsigned long responseTimeout = 4000);
+    int processDHCPRequestAsync();
+    int checkLease();
+    int request_DHCP_leaseAsync();
 };
 
 
