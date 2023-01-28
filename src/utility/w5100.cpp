@@ -98,7 +98,7 @@ uint8_t W5100Class::init(void)
 	// case maximum 560 ms pulse length.  This delay is meant to wait
 	// until the reset pulse is ended.  If your hardware has a shorter
 	// reset time, this can be edited or removed.
-	delay(560);
+	//delay(560);
 	//Serial.println("w5100 init");
 
 	SPI.begin();
