@@ -269,6 +269,7 @@ public:
 	using Print::write;
 	//void statusreport();
 
+    static uint8_t getActiveSocketCount();
 	// TODO: make private when socket allocation moves to EthernetClass
 	static uint16_t server_port[MAX_SOCK_NUM];
 };

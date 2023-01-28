@@ -120,6 +120,17 @@ EthernetServer::operator bool()
 	return false;
 }
 
+uint8_t EthernetServer::getActiveSocketCount() {
+    uint8_t result = 0;
+    for (uint8_t i = 0; i < MAX_SOCK_NUM; i++) {
+        uint8_t status = Ethernet.socketStatus(i);
+        if(status != SnSR::CLOSED) {
+            result++;
+        }
+    }
+    return result;
+}
+
 #if 0
 void EthernetServer::statusreport()
 {
